@@ -1,69 +1,78 @@
 import pandas as pd
 from datetime import datetime, timedelta
 
+def normalize_day(day_str, target_day_name):
+    """
+    Kontrollib, kas otsitav nädalapäev kuulub tabelis märgitud tähise alla.
+    """
+    day_str = str(day_str).upper().replace(" ", "")
+    target_map = {
+        'Monday': ['E', 'ER', 'E-R', 'EP', 'E-P', 'ESMASPÄEV', 'DEFAULT'],
+        'Tuesday': ['T', 'ER', 'E-R', 'EP', 'E-P', 'TR', 'T-R', 'TEISIPÄEV', 'DEFAULT'],
+        'Wednesday': ['K', 'ER', 'E-R', 'EP', 'E-P', 'TR', 'T-R', 'KOLMAPÄEV', 'DEFAULT'],
+        'Thursday': ['N', 'ER', 'E-R', 'EP', 'E-P', 'TR', 'T-R', 'EN', 'E-N', 'NELJAPÄEV', 'DEFAULT'],
+        'Friday': ['R', 'ER', 'E-R', 'EP', 'E-P', 'TR', 'T-R', 'REEDE', 'DEFAULT'],
+        'Saturday': ['L', 'LP', 'L-P', 'EP', 'E-P', 'LAUPÄEV', 'DEFAULT'],
+        'Sunday': ['P', 'LP', 'L-P', 'EP', 'E-P', 'PÜHAPÄEV', 'DEFAULT']
+    }
+    
+    # Kui tabelis on kuupäev (nt 06.04), kontrollime seda eraldi
+    if "." in day_str and len(day_str) <= 5:
+        return False # Seda käitleme filtreerimisel eraldi
+        
+    allowed_codes = target_map.get(target_day_name, [])
+    return day_str in allowed_codes
+
 def arvuta_tuuri_andmed(sisestatud_kuupäev, tuuri_number, tabeli_fail):
-    # 1. Laeme tabeli
     df = pd.read_csv(tabeli_fail)
     
-    # 2. Teisendame kuupäevad ja leiame nädalapäeva
     kuupaev_obj = datetime.strptime(sisestatud_kuupäev, '%Y-%m-%d')
-    nadalapaev = kuupaev_obj.strftime('%A') # Tagastab nt 'Monday'
-    
-    # Eesti keelsed vasted, kui tabelis on eestikeelsed päevad
-    paevade_kaart = {
-        'Monday': 'Esmaspäev',
-        'Tuesday': 'Teisipäev',
-        'Wednesday': 'Kolmapäev',
-        'Thursday': 'Neljapäev',
-        'Friday': 'Reede',
-        'Saturday': 'Laupäev',
-        'Sunday': 'Pühapäev'
-    }
-    ee_paev = paevade_kaart[nadalapaev]
+    inglise_paev = kuupaev_obj.strftime('%A') # Nt 'Monday'
+    luhike_kp = kuupaev_obj.strftime('%d.%m') # Nt '06.04'
 
-    # 3. Filtreerime õige rea (Tuur + Päev + Kehtivusvahemik)
+    # 1. Filtreerime kuupäeva vahemiku järgi
     df['ALATES'] = pd.to_datetime(df['ALATES'])
     df['KUNI'] = pd.to_datetime(df['KUNI'])
+    df = df[(df['ALATES'] <= kuupaev_obj) & (df['KUNI'] >= kuupaev_obj)].copy()
+
+    # 2. Otsime õiget rida (prioriteet: täpne kuupäev -> nädalapäev)
+    match = df[(df['TUUR'] == str(tuuri_number)) & (df['PAEV'] == luhike_kp)]
     
-    match = df[
-        (df['TUUR'] == tuuri_number) & 
-        (df['PAEV'] == ee_paev) & 
-        (df['ALATES'] <= kuupaev_obj) & 
-        (df['KUNI'] >= kuupaev_obj)
-    ]
+    if match.empty:
+        # Kui täpset kuupäeva pole, otsime nädalapäeva tähise järgi
+        df['is_match'] = df['PAEV'].apply(lambda x: normalize_day(x, inglise_paev))
+        match = df[(df['TUUR'] == str(tuuri_number)) & (df['is_match'] == True)]
 
     if match.empty:
-        return "Tuuri ei leitud antud kuupäeval."
+        return "Viga: Tuuri või päeva ei leitud!"
 
     rida = match.iloc[0]
-    algus_str = str(rida['ALGUS'])
-    lopp_str = str(rida['LOPP'])
-
-    # 4. KELLAAJA ARVUTAMISE LOOGIKA (Südaöö parandus)
+    
+    # 3. Kellaaja arvutus
     fmt = '%H:%M'
-    t1 = datetime.strptime(algus_str, fmt)
-    t2 = datetime.strptime(lopp_str, fmt)
+    # Puhastame kellaaja stringid tühikutest
+    algus_s = str(rida['ALGUS']).strip()
+    lopp_s = str(rida['LOPP']).strip()
+    
+    t1 = datetime.strptime(algus_s, fmt)
+    t2 = datetime.strptime(lopp_s, fmt)
 
-    # Kui lõppaeg on numbriliselt väiksem (nt 00:30 < 22:00), lisame ühe päeva
     if t2 <= t1:
         t2 += timedelta(days=1)
 
     tunnid = (t2 - t1).total_seconds() / 3600
     
-    # 5. Tasu arvutamine (näide)
-    tunnitasu = 10.0 # Sisesta siia oma õige tunnitasu
-    kokku_tasu = tunnid * tunnitasu
-    
-    if rida['SPLIT'] == True:
-        kokku_tasu += 5.0 # Lisa siia split-vahetuse lisatasu
+    # 4. PIIRANG: Maksimaalselt 12 tundi
+    if tunnid > 12.0:
+        tunnid = 12.0
 
     return {
-        "tunnid": tunnid,
-        "tasu": round(kokku_tasu, 2),
-        "algus": algus_str,
-        "lopp": lopp_str
+        "tuur": tuuri_number,
+        "paev": inglise_paev,
+        "algus": algus_s,
+        "lopp": lopp_s,
+        "tunnid": tunnid
     }
 
-# KASUTAMINE:
-# tulemus = arvuta_tuuri_andmed('2026-04-06', '33', 'tuurid.csv')
-# print(tulemus)
+# Testimine:
+# print(arvuta_tuuri_andmed('2026-04-06', '13/1', 'tabel.csv'))
