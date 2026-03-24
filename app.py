@@ -2,24 +2,24 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-# --- 1. SEADISTUS JA KONFIGURATSIOON ---
-st.set_page_config(page_title="Vedurijuhi Portaal", layout="wide")
+# --- 1. KONFIGURATSIOON JA ANDMED ---
+st.set_page_config(page_title="Vedurijuhi Kalkulaator PRO", layout="wide")
 
-# Google Sheets CSV eksportimise link (Asenda see oma uue meili tabeli lingiga!)
-# Tabel peab olema "Anyone with the link can view"
-SHEET_URL = "https://docs.google.com/spreadsheets/d/SINU_TABELI_ID/export?format=csv"
+# Kvalifikatsioonitasud
+KVAL_LISA = {"EMU/DMU": 140, "EMU+DMU": 165, "EMU+DMU+SKODA": 205}
 
-KVALIFIKATSIOONID = {
-    "EMU/DMU (140€)": 140,
-    "EMU+DMU (165€)": 165,
-    "EMU+DMU+SKODA (205€)": 205
-}
-
-ERISYNDMUSED = {
-    "KO (Kontor)": 8.0,
-    "Tehniline õppus": 2.0,
-    "Liikluskorralduse infotund": 4.0
-}
+# UUTE TUURIDE ANDMEBAAS (Näidis Sinu saadetud failidest)
+# See osa kolib tulevikus täielikult Google Sheetsi
+TUURIDE_DATA = [
+    # PERIOOD 1: Kuni 05.04
+    {"tuur": "60/1", "algus": "11:30", "lopp": "23:20", "paev": "default", "split": True, "alates": "2026-01-01", "kuni": "2026-04-05"},
+    # PERIOOD 2: Alates 06.04 (Uued tuurid)
+    {"tuur": "11/1", "algus": "09:15", "lopp": "18:35", "paev": "ER", "split": True, "alates": "2026-04-06", "kuni": "2026-06-14"},
+    {"tuur": "11/1", "algus": "08:00", "lopp": "18:35", "paev": "LP", "split": True, "alates": "2026-04-06", "kuni": "2026-06-14"},
+    {"tuur": "15/2", "algus": "05:15", "lopp": "09:35", "paev": "E", "split": False, "alates": "2026-04-06", "kuni": "2026-06-14"},
+    {"tuur": "15/2", "algus": "05:50", "lopp": "09:35", "paev": "T-R", "split": False, "alates": "2026-04-06", "kuni": "2026-06-14"},
+    {"tuur": "31/1", "algus": "09:40", "lopp": "20:00", "paev": "default", "split": True, "alates": "2026-04-06", "kuni": "2026-06-14"},
+]
 
 # --- 2. ABIFUNKTSIOONID ---
 
@@ -30,138 +30,90 @@ def get_day_type(date):
     if d == 4: return "R"
     return "LP"
 
-def get_quarter(month):
-    if month in [1, 2, 3]: return "Q1 (Jaan-Märts)"
-    if month in [4, 5, 6]: return "Q2 (Apr-Juuni)"
-    if month in [7, 8, 9]: return "Q3 (Juuli-Sept)"
-    return "Q4 (Okt-Dets)"
+def get_quarter_months(month):
+    if month in [1, 2, 3]: return [1, 2, 3], "Q1"
+    if month in [4, 5, 6]: return [4, 5, 6], "Q2"
+    if month in [7, 8, 9]: return [7, 8, 9], "Q3"
+    return [10, 11, 12], "Q4"
 
-def calculate_hours_and_pay(start_str, end_str, base, is_split, has_student, extra_min):
-    fmt = "%H:%M"
-    try:
-        s = datetime.strptime(start_str.strip(), fmt)
-        e = datetime.strptime(end_str.strip(), fmt)
-        if e <= s: e += timedelta(days=1)
-        
-        tunnid = ((e - s).total_seconds() / 3600) + (extra_min / 60)
-        
-        tunnitasu = base
-        if is_split: tunnitasu += (base * 0.20)
-        if has_student: tunnitasu += (base * 0.20)
-            
-        return tunnid, tunnid * tunnitasu
-    except:
-        return 0, 0
-
-# --- 3. ANDMETE LAADIMINE ---
-
-# Märtsikuu tuurid (ajutine lokaalne andmebaas kuni Sheets on valmis)
-# Formaat: "Tuur": {"Paevatüüp": (Algus, Lopp, Split)}
-MARTS_TUURID = {
-    "11/1": {"default": ("11:20", "20:50", True)},
-    "15/2": {"E": ("05:15", "10:25", False), "T-R": ("05:50", "09:35", False)},
-    "61/1": {"ER": ("05:40", "19:00", True), "LP": ("08:10", "19:00", True)},
-    # Siia lisanduvad ülejäänud märtsi tuurid...
-}
-
-# --- 4. KASUTAJALIIDES (SIDEBAR) ---
+# --- 3. SIDEBAR (SEADED) ---
 
 with st.sidebar:
     st.header("⚙️ Seaded")
-    baas_palk = st.number_input("Baastasu (€/h)", value=12.42)
-    valitud_kval = st.selectbox("Kvalifikatsioonipakett", options=list(KVALIFIKATSIOONID.keys()))
-    norm_kuu = st.number_input("Kuu normtunnid (100%)", value=168.0)
+    baaspalk = st.number_input("Baastasu (€/h)", value=12.42)
+    kval = st.selectbox("Kvalifikatsioon", options=list(KVAL_LISA.keys()))
+    kuu_norm = st.number_input("Kuu normtunnid", value=168.0)
     
     st.divider()
-    valitud_kuu = st.selectbox("Vali kuu täitmiseks", ["Jaanuar", "Veebruar", "Märts", "Aprill", "Mai", "Juuni"])
-    kuu_indeksid = {"Jaanuar": 1, "Veebruar": 2, "Märts": 3, "Aprill": 4, "Mai": 5, "Juuni": 6}
-    k_num = kuu_indeksid[valitud_kuu]
-    st.info(f"Kvartal: {get_quarter(k_num)}")
+    valitud_kuu_nimi = st.selectbox("Vali kuu", ["Jaanuar", "Veebruar", "Märts", "Aprill", "Mai", "Juuni"])
+    kuu_map = {"Jaanuar": 1, "Veebruar": 2, "Märts": 3, "Aprill": 4, "Mai": 5, "Juuni": 6}
+    k_num = kuu_map[valitud_kuu_nimi]
+    q_months, q_name = get_quarter_months(k_num)
+    st.info(f"Kvartal: {q_name}")
 
-# --- 5. TÖÖGRAAFIKU TÄITMINE ---
+# --- 4. PEALEHT ---
 
-st.title(f"🚂 Vedurijuhi Töölaud: {valitud_kuu}")
+st.title(f"🚂 {valitud_kuu_nimi} 2026 Graafik")
 
-# Määrame päevade arvu
-if k_num in [4, 6, 9, 11]: päevi = 30
-elif k_num == 2: päevi = 28
-else: päevi = 31
+päevi = (pd.Timestamp(2026, k_num, 1) + pd.offsets.MonthEnd(0)).day
+graafik = []
 
-graafik_tabel = []
 cols = st.columns(7)
-
 for i in range(1, päevi + 1):
-    curr_date = datetime(2026, k_num, i)
-    dtype = get_day_type(curr_date)
+    dt = datetime(2026, k_num, i)
+    dtype = get_day_type(dt)
     
-    with cols[(i-1) % 7]:
+    with cols[(i-1)%7]:
         st.write(f"**{i:02d}.{k_num:02d} ({dtype})**")
+        t_valik = st.selectbox("Tuur", ["Vaba", "P", "KO", "11/1", "15/2", "31/1", "60/1"], key=f"t{i}")
+        lisa_min = st.number_input("+ min", min_value=0, step=5, key=f"m{i}")
+        opilane = st.checkbox("Õp", key=f"s{i}")
+
+        # Arvutusloogika
+        tunnid, tasu, norm_vahendus = 0, 0, 0
         
-        # Tuuri valik (Lisatud P - Puhkus)
-        t_valik = st.selectbox("Tuur", ["Vaba", "P (Puhkus)", "KO", "Õppus"] + sorted(list(MARTS_TUURID.keys())), key=f"t_{i}")
+        if t_valik == "P":
+            norm_vahendus = 8.0
+        elif t_valik == "KO":
+            tunnid, tasu = 8.0, 8.0 * baaspalk
+        elif t_valik != "Vaba":
+            # Filtreerime õige tuuri vastavalt kuupäevale ja päevale
+            leitud = False
+            for r in TUURIDE_DATA:
+                alates = datetime.strptime(r["alates"], "%Y-%m-%d")
+                kuni = datetime.strptime(r["kuni"], "%Y-%m-%d")
+                
+                if r["tuur"] == t_valik and alates <= dt <= kuni:
+                    # Kontrollime päeva tüüpi (E, T-R, LP, default)
+                    if r["paev"] == "default" or r["paev"] == dtype or \
+                       (r["paev"] == "ER" and dtype != "LP") or \
+                       (r["paev"] == "T-R" and dtype in ["T-N", "R"]):
+                        
+                        s_dt = datetime.strptime(r["algus"], "%H:%M")
+                        e_dt = datetime.strptime(r["lopp"], "%H:%M")
+                        if e_dt <= s_dt: e_dt += timedelta(days=1)
+                        
+                        tunnid = ((e_dt - s_dt).total_seconds() / 3600) + (lisa_min / 60)
+                        tunnitasu = baaspalk
+                        if r["split"]: tunnitasu += (baaspalk * 0.20)
+                        if opilane: tunnitasu += (baaspalk * 0.20)
+                        tasu = tunnid * tunnitasu
+                        leitud = True
+                        break
         
-        # Lisaaeg ja õpilane
-        lisa_min = st.number_input("+ min", min_value=0, step=5, key=f"m_{i}")
-        on_opilane = st.checkbox("Õp", key=f"s_{i}")
+        graafik.append({"t": tunnid, "r": tasu, "nv": norm_vahendus, "work": t_valik not in ["Vaba", "P"]})
 
-        p_tunnid, p_tasu, is_work, normi_vahendus = 0, 0, False, 0
+# --- 5. KOKKUVÕTE JA KVARTAL ---
 
-        if t_valik == "P (Puhkus)":
-            normi_vahendus = 8.0 # Vähendab kuu normi
-        elif t_valik in ERISYNDMUSED:
-            p_tunnid = ERISYNDMUSED[t_valik]
-            p_tasu = p_tunnid * baas_palk
-            is_work = True
-        elif t_valik in MARTS_TUURID:
-            is_work = True
-            db = MARTS_TUURID[t_valik]
-            # Valime loogika (lihtsustatud siin, laiendatav Sheetsiga)
-            if dtype in db: logic = db[dtype]
-            elif "ER" in db and dtype != "LP": logic = db["ER"]
-            else: logic = db.get("default", ("00:00", "00:00", False))
-            
-            p_tunnid, p_tasu = calculate_hours_and_pay(logic[0], logic[1], baas_palk, logic[2], on_opilane, lisa_min)
-
-        graafik_tabel.append({
-            "Päev": i, 
-            "Tunnid": p_tunnid, 
-            "Tasu": p_tasu, 
-            "Töö": is_work, 
-            "Normivähendus": normi_vahendus
-        })
-
-# --- 6. ARVUTUSED JA STATISTIKA ---
-
-df = pd.DataFrame(graafik_tabel)
-
-kokku_tunnid = df["Tunnid"].sum()
-kokku_tasu = df["Tasu"].sum()
-kokku_normi_vahendus = df["Normivähendus"].sum()
-toopaevi = df[df["Töö"] == True].shape[0]
-
-# Kvalifikatsioonitasu (piiranguga)
-max_kval = KVALIFIKATSIOONID[valitud_kval]
-arvutatud_kval = min((toopaevi / 22) * max_kval, max_kval) # 22 on keskmine tööpäevade arv
-
-# Ületundide loogika
-tegelik_norm = norm_kuu - kokku_normi_vahendus
-uletunnid = max(0, kokku_tunnid - tegelik_norm)
-uletundide_lisatasu = uletunnid * (baas_palk * 0.5) # See on see "0.5 osa", mis teeb kokku 1.5x
+df = pd.DataFrame(graafik)
+kokku_t = df["t"].sum()
+tegelik_norm = kuu_norm - df["nv"].sum()
+uletunnid = max(0, kokku_t - tegelik_norm)
 
 st.divider()
+c1, c2, c3 = st.columns(3)
+c1.metric("Töötatud tunde", f"{kokku_t:.2f} h")
+c2.metric("Ületunnid", f"{uletunnid:.2f} h", delta=f"Norm: {tegelik_norm}h")
+c3.metric("Kvartali lisa (0.5x)", f"{uletunnid * baaspalk * 0.5:.2f} €")
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Tehtud töötunnid", f"{kokku_tunnid:.2f} h")
-col2.metric("Tegelik norm", f"{tegelik_norm:.1f} h", delta=f"-{kokku_normi_vahendus}h (P)")
-col3.metric("Ületunnid", f"{uletunnid:.2f} h")
-col4.metric("Kvalifikatsioon", f"{arvutatud_kval:.2f} €")
-
-st.subheader(f"💰 Prognoositav väljamakse: {(kokku_tasu + arvutatud_kval):.2f} €")
-
-# Kvartali info
-with st.expander("📊 Kvartali ületundide arvestus (info)"):
-    st.write(f"Käesolev kvartal: **{get_quarter(k_num)}**")
-    st.write(f"Selle kuu ületundide lisatasu (1.5x): **{uletundide_lisatasu:.2f} €**")
-    st.caption("Märkus: Ületundide lisatasu makstakse välja kvartali viimasel kuul.")
-
-st.dataframe(df[df["Tunnid"] > 0][["Päev", "Tunnid", "Tasu"]], use_container_width=True)
+st.success(f"### Jooksev kuu Bruto: {(df['r'].sum() + KVAL_LISA[kval]):.2f} €")
