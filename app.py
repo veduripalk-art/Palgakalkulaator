@@ -11,7 +11,6 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=cs
 KVAL_LISA = {"EMU/DMU": 140, "EMU+DMU": 165, "EMU+DMU+SKODA": 205}
 OPILASE_TUNNITASU = 2.83 
 
-# Erisused (ainult minutite jaoks)
 if 'minutid' not in st.session_state:
     st.session_state.minutid = {}
 
@@ -24,8 +23,9 @@ def load_data():
         for col in ['TUUR', 'PAEV', 'ALGUS', 'LOPP', 'SPLIT']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
-        df['ALATES'] = pd.to_datetime(df['ALATES'], errors='coerce')
-        df['KUNI'] = pd.to_datetime(df['KUNI'], errors='coerce')
+        # PARANDUS: dayfirst=True tagab, et 06.04 on 6. aprill, mitte 4. juuni
+        df['ALATES'] = pd.to_datetime(df['ALATES'], dayfirst=True, errors='coerce')
+        df['KUNI'] = pd.to_datetime(df['KUNI'], dayfirst=True, errors='coerce')
         return df.dropna(subset=['TUUR', 'ALATES', 'KUNI'])
     except Exception as e:
         st.error(f"Viga tabeli laadimisel: {e}")
@@ -35,6 +35,7 @@ def get_matching_rows(df, tuur_nimi, valitud_kuupaev):
     mask = (df['TUUR'] == tuur_nimi) & (df['ALATES'] <= valitud_kuupaev) & (df['KUNI'] >= valitud_kuupaev)
     potentsiaalsed = df[mask]
     if potentsiaalsed.empty: return None
+    
     wd = valitud_kuupaev.weekday()
     kp_str = valitud_kuupaev.strftime("%d.%m")
     sobivad = ["DEFAULT"]
@@ -44,6 +45,7 @@ def get_matching_rows(df, tuur_nimi, valitud_kuupaev):
     if 1 <= wd <= 4: sobivad.append("T-R")
     if wd <= 3: sobivad.append("E-N")
     if wd == 4: sobivad.append("R")
+    
     match = potentsiaalsed[potentsiaalsed['PAEV'].str.contains(kp_str, na=False)]
     if not match.empty: return match.iloc[0]
     for tahis in reversed(sobivad):
@@ -85,24 +87,28 @@ if df_tuurid is not None:
     paevi_kuus = (pd.Timestamp(2026, k_num, 1) + pd.offsets.MonthEnd(0)).day
     graafik_tulemused = []
     
+    # Nädalapäevade tähised (0=E, 1=T... 6=P)
+    paeva_tahised = ["E", "T", "K", "N", "R", "L", "P"]
+    
     cols = st.columns(7) 
     for i in range(1, paevi_kuus + 1):
         dt = datetime(2026, k_num, i)
         lisa_min = st.session_state.minutid.get(f"{i}.{k_num}", 0)
+        nadalapaev = paeva_tahised[dt.weekday()]
         
         with cols[(i-1)%7]:
-            # Kui on lisaminutid, näitame märki
-            p_text = f"**{i:02d}.{k_num:02d}**"
+            # Nüüd näitab kalender ka tähte, nt: E 01.03
+            p_text = f"**{nadalapaev} {i:02d}.{k_num:02d}**"
             if lisa_min > 0: p_text += f" (+{lisa_min}m)"
             st.write(p_text)
             
             tuuri_nimed = sorted(df_tuurid['TUUR'].unique().tolist())
             t_valik = st.selectbox("T", ["Vaba", "P", "KO"] + tuuri_nimed, key=f"t{i}", label_visibility="collapsed")
-            # ÕPILASE MÄRGE TAGASI KALENDRISSE
-            opilane = st.checkbox("Õ", key=f"s{i}", help="Õpilase tasu 2.83€/h")
+            opilane = st.checkbox("Õ", key=f"s{i}")
 
             tunnid, tasu, nv_tunnid = 0.0, 0.0, 0.0
             is_work = False
+            viga_tekst = ""
 
             if t_valik == "P":
                 nv_tunnid = 8.0
@@ -124,8 +130,14 @@ if df_tuurid is not None:
                         kordaja = 1.2 if str(rida['SPLIT']).upper() == "TRUE" else 1.0
                         tasu = (tunnid * baaspalk * kordaja) + (tunnid * OPILASE_TUNNITASU if opilane else 0)
                         is_work = True
-                    except:
-                        pass
+                    except Exception as e:
+                        viga_tekst = "Kell vale!"
+                else:
+                    viga_tekst = "Ei leitud!"
+
+            # Näitame vea teadet, kui midagi läks nihu
+            if viga_tekst:
+                st.markdown(f"<span style='color:red; font-size:12px; font-weight:bold;'>{viga_tekst}</span>", unsafe_allow_html=True)
 
             graafik_tulemused.append({"t": tunnid, "r": tasu, "nv": nv_tunnid, "work": is_work})
 
