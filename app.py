@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 # --- 1. SEADISTUS ---
 st.set_page_config(page_title="Vedurijuhi Kalkulaator PRO", layout="wide")
 
-# !!! 1g78dHlfNWL8SXc3Ee3C_tpxWvdXNqt2edwzvUuSdW6w !!!
-SHEET_ID = "1g78dHlfNWL8SXc3Ee3C_tpxWvdXNqt2edwzvUuSdW6w"
+# !!! 123_0JLW-SPtFugfMLTCIvTaL80Puexw875lWOmwXvjc !!!
+SHEET_ID = "123_0JLW-SPtFugfMLTCIvTaL80Puexw875lWOmwXvjc"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
 KVAL_LISA = {"EMU/DMU": 140, "EMU+DMU": 165, "EMU+DMU+SKODA": 205}
