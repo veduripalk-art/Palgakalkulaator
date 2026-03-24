@@ -15,29 +15,29 @@ if 'minutid' not in st.session_state:
     st.session_state.minutid = {}
 
 # --- 2. ANDMETE LAADIMINE ---
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60) # Lühendasin puhvrit, et muudatused Sheetsis kiiremini ilmuks
 def load_data():
     try:
         df = pd.read_csv(SHEET_URL)
         df.columns = [str(c).strip().upper() for c in df.columns]
+        # Puhastame kõik tekstiveerud
         for col in ['TUUR', 'PAEV', 'ALGUS', 'LOPP', 'SPLIT']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
-        # PARANDUS: dayfirst=True tagab, et 06.04 on 6. aprill, mitte 4. juuni
-        df['ALATES'] = pd.to_datetime(df['ALATES'], dayfirst=True, errors='coerce')
-        df['KUNI'] = pd.to_datetime(df['KUNI'], dayfirst=True, errors='coerce')
-        return df.dropna(subset=['TUUR', 'ALATES', 'KUNI'])
+        return df.dropna(subset=['TUUR']) # Jätame alles kõik, kus on vähemalt tuuri nimi
     except Exception as e:
         st.error(f"Viga tabeli laadimisel: {e}")
         return None
 
 def get_matching_rows(df, tuur_nimi, valitud_kuupaev):
-    mask = (df['TUUR'] == tuur_nimi) & (df['ALATES'] <= valitud_kuupaev) & (df['KUNI'] >= valitud_kuupaev)
-    potentsiaalsed = df[mask]
+    # Filtreerime ainult nime järgi, et märtsis ka aprilli tuure näha
+    potentsiaalsed = df[df['TUUR'] == tuur_nimi]
     if potentsiaalsed.empty: return None
     
     wd = valitud_kuupaev.weekday()
     kp_str = valitud_kuupaev.strftime("%d.%m")
+    
+    # Määrame, mis tähiseid me tabelist otsime
     sobivad = ["DEFAULT"]
     if wd <= 4: sobivad.append("ER")
     if wd >= 5: sobivad.append("LP")
@@ -46,12 +46,17 @@ def get_matching_rows(df, tuur_nimi, valitud_kuupaev):
     if wd <= 3: sobivad.append("E-N")
     if wd == 4: sobivad.append("R")
     
+    # 1. Otsime täpset kuupäeva (nt 24.02)
     match = potentsiaalsed[potentsiaalsed['PAEV'].str.contains(kp_str, na=False)]
     if not match.empty: return match.iloc[0]
+    
+    # 2. Otsime päeva tähist (ER, LP jne)
     for tahis in reversed(sobivad):
         match = potentsiaalsed[potentsiaalsed['PAEV'].str.upper() == tahis]
         if not match.empty: return match.iloc[0]
-    return None
+        
+    # 3. Kui midagi ei leitud, võtame esimese ettejuhtuva selle nimega rea
+    return potentsiaalsed.iloc[0]
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
@@ -66,6 +71,7 @@ with st.sidebar:
     kuu_map = {"Märts": 3, "Aprill": 4, "Mai": 5, "Juuni": 6}
     k_num = kuu_map[valitud_kuu]
     
+    # Dünaamiline päevade arv
     paevi_valikus = range(1, (pd.Timestamp(2026, k_num, 1) + pd.offsets.MonthEnd(0)).day + 1)
     e_paev = st.selectbox("Vali kuupäev", paevi_valikus)
     e_min = st.number_input("Lisa minutid (+)", min_value=0, step=5)
@@ -73,11 +79,6 @@ with st.sidebar:
     if st.button("Salvesta minutid"):
         st.session_state.minutid[f"{e_paev}.{k_num}"] = e_min
         st.toast(f"Päevale {e_paev} lisatud {e_min} min")
-
-    if st.session_state.minutid:
-        if st.button("Puhasta lisaminutid"):
-            st.session_state.minutid = {}
-            st.rerun()
 
 # --- 4. PEALINE TÖÖLAUD ---
 df_tuurid = load_data()
@@ -87,28 +88,27 @@ if df_tuurid is not None:
     paevi_kuus = (pd.Timestamp(2026, k_num, 1) + pd.offsets.MonthEnd(0)).day
     graafik_tulemused = []
     
-    # Nädalapäevade tähised (0=E, 1=T... 6=P)
     paeva_tahised = ["E", "T", "K", "N", "R", "L", "P"]
-    
     cols = st.columns(7) 
+    
+    tuuri_nimed = sorted(df_tuurid['TUUR'].unique().tolist())
+
     for i in range(1, paevi_kuus + 1):
         dt = datetime(2026, k_num, i)
         lisa_min = st.session_state.minutid.get(f"{i}.{k_num}", 0)
         nadalapaev = paeva_tahised[dt.weekday()]
         
         with cols[(i-1)%7]:
-            # Nüüd näitab kalender ka tähte, nt: E 01.03
             p_text = f"**{nadalapaev} {i:02d}.{k_num:02d}**"
             if lisa_min > 0: p_text += f" (+{lisa_min}m)"
             st.write(p_text)
             
-            tuuri_nimed = sorted(df_tuurid['TUUR'].unique().tolist())
             t_valik = st.selectbox("T", ["Vaba", "P", "KO"] + tuuri_nimed, key=f"t{i}", label_visibility="collapsed")
             opilane = st.checkbox("Õ", key=f"s{i}")
 
             tunnid, tasu, nv_tunnid = 0.0, 0.0, 0.0
             is_work = False
-            viga_tekst = ""
+            viga = ""
 
             if t_valik == "P":
                 nv_tunnid = 8.0
@@ -120,8 +120,8 @@ if df_tuurid is not None:
                 rida = get_matching_rows(df_tuurid, t_valik, dt)
                 if rida is not None:
                     try:
-                        s_str = str(rida['ALGUS']).replace('.', ':')
-                        e_str = str(rida['LOPP']).replace('.', ':')
+                        s_str = str(rida['ALGUS']).replace('.', ':').replace(',', ':')
+                        e_str = str(rida['LOPP']).replace('.', ':').replace(',', ':')
                         s_dt = datetime.strptime(s_str, "%H:%M")
                         e_dt = datetime.strptime(e_str, "%H:%M")
                         if e_dt <= s_dt: e_dt += timedelta(days=1)
@@ -130,28 +130,29 @@ if df_tuurid is not None:
                         kordaja = 1.2 if str(rida['SPLIT']).upper() == "TRUE" else 1.0
                         tasu = (tunnid * baaspalk * kordaja) + (tunnid * OPILASE_TUNNITASU if opilane else 0)
                         is_work = True
-                    except Exception as e:
-                        viga_tekst = "Kell vale!"
+                    except:
+                        viga = "Kell vale!"
                 else:
-                    viga_tekst = "Ei leitud!"
+                    viga = "Andmed puudu!"
 
-            # Näitame vea teadet, kui midagi läks nihu
-            if viga_tekst:
-                st.markdown(f"<span style='color:red; font-size:12px; font-weight:bold;'>{viga_tekst}</span>", unsafe_allow_html=True)
+            if viga:
+                st.caption(f":red[{viga}]")
 
             graafik_tulemused.append({"t": tunnid, "r": tasu, "nv": nv_tunnid, "work": is_work})
 
     # --- KOKKUVÕTE ---
     res_df = pd.DataFrame(graafik_tulemused)
     kokku_t = res_df["t"].sum()
-    uletunnid = max(0, kokku_t - (norm_kuu - res_df["nv"].sum()))
+    tegelik_norm = norm_kuu - res_df["nv"].sum()
+    uletunnid = max(0, kokku_t - tegelik_norm)
     toopaevi = res_df[res_df["work"] == True].shape[0]
     kval_euro = min((toopaevi / 22) * KVAL_LISA[kval], KVAL_LISA[kval])
+    
     bruto = res_df['r'].sum() + kval_euro + (uletunnid * baaspalk * 0.5)
     
     st.divider()
     c1, c2, c3 = st.columns(3)
     c1.metric("Töötatud tunde", f"{kokku_t:.2f} h")
     c2.metric("Ületunnid", f"{uletunnid:.2f} h")
-    c3.metric("Ületunni lisa (0.5x)", f"{uletunnid * baaspalk * 0.5:.2f} €")
+    c3.metric("Ületunni lisa", f"{uletunnid * baaspalk * 0.5:.2f} €")
     st.success(f"### Prognoositav kuu Bruto: {bruto:.2f} €")
