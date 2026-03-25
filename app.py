@@ -72,12 +72,6 @@ kval = st.sidebar.selectbox("Kvalifikatsioon", options=list(KVALIFIKATSIOONID.ke
 norm_paevad = st.sidebar.number_input("Kuu norm tööpäevad", value=21, min_value=1)
 
 st.sidebar.markdown("---")
-st.sidebar.header("⏱️ Kvartali Ületunnid")
-st.sidebar.info("Q1: Jaan-Märts | Q2: Apr-Juuni jne.")
-kvartali_norm = st.sidebar.number_input("Kvartali normtunnid kokku", value=480, step=8)
-eelmiste_kuude_tunnid = st.sidebar.number_input("Samas kvartalis JUBa tehtud tunnid", value=0.0, step=1.0)
-
-st.sidebar.markdown("---")
 st.sidebar.header("✏️ Manuaalne minutite muudatus")
 korr_kp = st.sidebar.date_input("Vali kuupäev, kuhu minuteid lisada/eemaldada")
 korr_min = st.sidebar.number_input("Minutid (+/-)", value=0, step=1)
@@ -188,7 +182,7 @@ for _, row in muudetud_df.iterrows():
             "Päev Kokku": round(p_tasu_rida + o_tasu_rida + split_tasu + opilane_tasu, 2)
         })
 
-# 4. KOKKUVÕTE JA ÜLETUNNID
+# 4. KOKKUVÕTE
 st.markdown("---")
 st.subheader("📊 Arvutuskäik ja tulemused")
 
@@ -199,31 +193,27 @@ if tulemused:
     # Kvalifikatsioonitasu arvutus
     baas_kval = KVALIFIKATSIOONID[kval]
     kval_summa = min(baas_kval, (baas_kval / norm_paevad) * toopaevad_count) if norm_paevad > 0 else 0
-    
-    # Kvartali ületundide arvutus
-    kvartali_tegelik_norm = kvartali_norm - normist_maha
-    kvartali_kokku_tehtud = kokku_tunnid + eelmiste_kuude_tunnid
-    uletunnid_h = max(0, kvartali_kokku_tehtud - kvartali_tegelik_norm)
-    uletundide_tasu = uletunnid_h * TUNNIHIND * 1.5
 
     # Koondtabeli kuvamine
     st.subheader("💰 Koondkokkuvõte")
+    
+    # Töötundide info kohe tabeli kohal
+    st.info(f"**Töötunnid kokku:** {round(kokku_tunnid, 2)} h")
+    
     df_summ = pd.DataFrame({
         "Tasuliik": [
             "1. Põhitasu (sh >12h pausid)", 
             "2. Õhtu- ja öölisad", 
             "3. Kahepoolne tuur (Split 20%)", 
             "4. Õpilase juhendamine", 
-            "5. Kvalifikatsioonitasu", 
-            f"6. Kvartali ületunnid ({round(uletunnid_h, 2)} h)"
+            "5. Kvalifikatsioonitasu"
         ],
         "Summa (€)": [
             res_df['Põhitasu+Paus'].sum(),
             res_df['Õhtu/Öö'].sum(),
             res_df['Split (20%)'].sum(),
             res_df['Õpilane'].sum(),
-            kval_summa,
-            uletundide_tasu
+            kval_summa
         ]
     })
     
