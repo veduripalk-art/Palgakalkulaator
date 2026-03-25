@@ -7,7 +7,7 @@ import calendar
 TUNNIHIND = 12.42
 OHTULISA_PROTSENT = 0.20
 OOLISA_PROTSENT = 0.40
-KAHEPOOLNE_LISA = 0.20        # PARANDATUD: Ainult 20% kogu tuuri ulatuses
+KAHEPOOLNE_LISA = 0.20
 OPILASE_TASU_TUNNIS = 2.58
 PAUSI_TASU_PROTSENT = 0.60
 ULETUNNI_KOEFITSIENT = 1.5
@@ -48,45 +48,42 @@ st.title("🚂 Töötasu kalkulaator")
 @st.cache_data
 def lae_db():
     try:
-        # Loeme Sinu andmebaasi
         df_db = pd.read_csv("parandatud tabel.csv", sep="\t")
         df_db['ALATES'] = pd.to_datetime(df_db['ALATES']).dt.date
         df_db['KUNI'] = pd.to_datetime(df_db['KUNI']).dt.date
         return df_db
     except Exception as e:
-        st.error(f"Andmebaasi faili ei leitud või viga: {e}")
+        st.error(f"Andmebaasi viga: {e}")
         return pd.DataFrame()
 
 db = lae_db()
 
-# 1. KALENDRI SEADED
-st.sidebar.header("Kalender")
+# 1. SEADED
+st.sidebar.header("Kalender ja Seaded")
 tana = datetime.now()
 valitud_aasta = st.sidebar.selectbox("Aasta", [2025, 2026], index=1)
 valitud_kuu = st.sidebar.selectbox("Kuu", list(range(1, 13)), index=tana.month-1)
 
-_, viimane_paev = calendar.monthrange(valitud_aasta, valitud_kuu)
-kuupaevad = [date(valitud_aasta, valitud_kuu, d) for d in range(1, viimane_paev + 1)]
-
-# Tuuride valikunimekiri
-if not db.empty:
-    tuuride_valik = [""] + sorted(db['TUUR'].unique().astype(str).tolist()) + ["P", "TÕ", "KO", "KV"]
-else:
-    tuuride_valik = ["", "P", "TÕ", "KO", "KV"]
-
-# 2. ÜLDISED LISAD
-st.sidebar.markdown("---")
 kval = st.sidebar.selectbox("Kvalifikatsioon", options=list(KVALIFIKATSIOONID.keys()))
 norm_paevad = st.sidebar.number_input("Kuu norm tööpäevad", value=21)
 kvartali_norm = st.sidebar.number_input("Kvartali normtunnid", value=480)
 
-# 3. GRAAFIKU TABEL
+# Genereerime kuupäevad
+_, viimane_paev = calendar.monthrange(valitud_aasta, valitud_kuu)
+kuupaevad = [date(valitud_aasta, valitud_kuu, d) for d in range(1, viimane_paev + 1)]
+
+# Tuuride valik
+tuuride_valik = [""] + sorted(db['TUUR'].unique().astype(str).tolist()) + ["P", "TÕ", "KO", "KV"]
+
+# 2. GRAAFIKU TABEL
 st.subheader(f"📅 {valitud_kuu}.{valitud_aasta} Töögraafik")
+st.info("Lisa minutid veergu 'Lisa min', kui soovid tuuri pikkust korrigeerida.")
 
 if 'df_input' not in st.session_state or st.sidebar.button("Uuenda kalendri kuud"):
     st.session_state.df_input = pd.DataFrame({
         "Kuupäev": kuupaevad,
-        "Tuuri Valik": [""] * len(kuupaevad),
+        "Tuur": [""] * len(kuupaevad),
+        "Lisa min": [0] * len(kuupaevad),
         "Õpilane (Õ)": [False] * len(kuupaevad)
     })
 
@@ -94,21 +91,22 @@ muudetud_df = st.data_editor(
     st.session_state.df_input,
     column_config={
         "Kuupäev": st.column_config.DateColumn(disabled=True, format="DD.MM (dddd)"),
-        "Tuuri Valik": st.column_config.SelectboxColumn("Vali Tuur", options=tuuride_valik, width="medium"),
+        "Tuur": st.column_config.SelectboxColumn("Vali Tuur", options=tuuride_valik, width="medium"),
+        "Lisa min": st.column_config.NumberColumn("Lisa min", help="Lisa või eemalda minuteid", step=1, format="%d"),
         "Õpilane (Õ)": st.column_config.CheckboxColumn(width="small")
     },
     hide_index=True,
-    use_container_width=True,
-    key="editor"
+    use_container_width=True
 )
 
-# 4. ARVUTUSTE LOOGIKA
+# 3. ARVUTUSTE LOOGIKA
 tulemused = []
 kokku_tunnid, normi_vahendus, toopaevad_count = 0.0, 0, 0
 
 for _, row in muudetud_df.iterrows():
     kp = row["Kuupäev"]
-    kood = str(row["Tuuri Valik"])
+    kood = str(row["Tuur"])
+    lisa_min = row["Lisa min"]
     is_student = row["Õpilane (Õ)"]
     
     if not kood or kood == "": continue
@@ -116,7 +114,6 @@ for _, row in muudetud_df.iterrows():
     t, ohtu, oo, paus, split_tasu, opilane_tasu = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     leitud = False
     
-    # Erikoodid
     if kood == "P":
         normi_vahendus += 8
         leitud = True
@@ -125,7 +122,6 @@ for _, row in muudetud_df.iterrows():
         toopaevad_count += 1
         leitud = True
     else:
-        # Otsing andmebaasist
         otsing = db[(db['TUUR'].astype(str) == kood) & (db['ALATES'] <= kp) & (db['KUNI'] >= kp)]
         rida = next((r for _, r in otsing.iterrows() if sobib_paevaga(r['PAEV'], kp.weekday())), None)
         
@@ -134,7 +130,7 @@ for _, row in muudetud_df.iterrows():
             toopaevad_count += 1
             t_raw, o_h, oo_h = arvuta_ajad(rida['ALGUS'], rida['LOPP'])
             
-            # 12h piirangu loogika
+            # 12h loogika
             if t_raw > 12:
                 paus = t_raw - 12
                 suhe = 12 / t_raw
@@ -142,15 +138,16 @@ for _, row in muudetud_df.iterrows():
             else:
                 ohtu, oo, t = o_h, oo_h, t_raw
             
-            # Tasude arvutus
+            # SPLIT KONTROLL (Erand tuurile 33)
             pohitasu_baas = (t * TUNNIHIND) + (paus * TUNNIHIND * PAUSI_TASU_PROTSENT)
-            
-            # KONTROLL: Kas on kahepoolne tuur?
-            if str(rida['SPLIT']).upper() == 'TRUE':
+            if str(rida['SPLIT']).upper() == 'TRUE' and kood != "33":
                 split_tasu = pohitasu_baas * KAHEPOOLNE_LISA
             
             if is_student:
                 opilane_tasu = (t + paus) * OPILASE_TASU_TUNNIS
+
+    # Lisa manuaalsed minutid
+    t += (lisa_min / 60.0)
 
     if leitud:
         p_tasu_rida = (t * TUNNIHIND) + (paus * TUNNIHIND * PAUSI_TASU_PROTSENT)
@@ -158,30 +155,25 @@ for _, row in muudetud_df.iterrows():
         kokku_tunnid += (t + paus)
         
         tulemused.append({
-            "Kuupäev": kp.strftime("%d.%m"),
-            "Tuur": kood,
-            "Tunnid": round(t+paus, 2),
-            "Põhitasu": round(p_tasu_rida, 2),
-            "Õhtu/Öö": round(o_tasu_rida, 2),
-            "Split (20%)": round(split_tasu, 2),
-            "Õpilane": round(opilane_tasu, 2),
+            "Kuupäev": kp.strftime("%d.%m"), "Tuur": kood, "Tunnid": round(t+paus, 2),
+            "Põhitasu": round(p_tasu_rida, 2), "Õhtu/Öö": round(o_tasu_rida, 2),
+            "Split (20%)": round(split_tasu, 2), "Õpilane": round(opilane_tasu, 2),
             "Kokku": round(p_tasu_rida + o_tasu_rida + split_tasu + opilane_tasu, 2)
         })
 
-# KOONDARVUTUSED
-kval_summa = min(KVALIFIKATSIOONID[kval], (KVALIFIKATSIOONID[kval] / norm_paevad) * toopaevad_count) if norm_paevad > 0 else 0
-uletunnid = max(0, kokku_tunnid - (kvartali_norm - normi_vahendus))
-ut_tasu = uletunnid * TUNNIHIND * ULETUNNI_KOEFITSIENT
-
-# 5. KUVAMINE
+# 4. KOKKUVÕTE
 st.markdown("---")
 if tulemused:
     c1, c2 = st.columns([2, 1])
     with c1:
         st.dataframe(pd.DataFrame(tulemused), hide_index=True, use_container_width=True)
     with c2:
+        kval_summa = min(KVALIFIKATSIOONID[kval], (KVALIFIKATSIOONID[kval] / norm_paevad) * toopaevad_count) if norm_paevad > 0 else 0
+        uletunnid = max(0, kokku_tunnid - (kvartali_norm - normi_vahendus))
+        ut_tasu = uletunnid * TUNNIHIND * ULETUNNI_KOEFITSIENT
+        
         df_summ = pd.DataFrame({
-            "Kirjeldus": ["Põhitasu", "Õhtu/Öö lisad", "Kahepoolne tuur", "Õpilase tasu", "Kvalifikatsioon", "Ületunnid"],
+            "Kirjeldus": ["Põhitasu", "Õhtu/Öö", "Split (20%)", "Õpilane", "Kvalifikatsioon", "Ületunnid"],
             "Summa (€)": [
                 sum(x['Põhitasu'] for x in tulemused),
                 sum(x['Õhtu/Öö'] for x in tulemused),
@@ -190,6 +182,8 @@ if tulemused:
                 kval_summa, ut_tasu
             ]
         })
+        st.table(df_summ)
+        st.success(f"**KOGUSUMMA: {round(df_summ['Summa (€)'].sum(), 2)} €**")
         st.table(df_summ)
         st.success(f"**KOGUSUMMA: {round(df_summ['Summa (€)'].sum(), 2)} €**")
 else:
