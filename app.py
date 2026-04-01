@@ -191,6 +191,7 @@ for _, row in muudetud_df.iterrows():
 
     # ... (eelnev kood kuni "if leitud:" osani loopi sees) ...
 
+    # ... (see osa läheb loop-i sisse, kus on "if leitud:") ...
     if leitud:
         kokku_tunnid += t_work
         tulemused.append({
@@ -199,10 +200,11 @@ for _, row in muudetud_df.iterrows():
             "Töötunde": round(t_work, 2),
             "Õhtu h": round(ohtu_h, 2),
             "Öö h": round(oo_h, 2),
-            "Paus >12h": round(paus_h, 2),
             "Spliti kestus": round(t_span if on_kahepoolne else 0, 2),
             "Põhitasu (€)": round(p_tasu_rida, 2),
-            "Lisad (€)": round(o_tasu_rida + split_tasu + opilane_tasu, 2),
+            "Õhtu/Öö lisa (€)": round(o_tasu_rida, 2),
+            "Split lisa (€)": round(split_tasu, 2),
+            "Õpilase lisa (€)": round(opilane_tasu, 2),
             "Päev Kokku (€)": round(p_tasu_rida + o_tasu_rida + split_tasu + opilane_tasu, 2)
         })
 
@@ -213,30 +215,28 @@ st.subheader("📊 Arvutuskäik ja tulemused")
 if tulemused:
     res_df = pd.DataFrame(tulemused)
     
-    # Kuvame põhitabeli
+    # Kuvame põhitasu tabeli (võid siit veergusid vähemaks võtta, kui liiga lai)
     st.dataframe(res_df, hide_index=True, use_container_width=True)
     
-    # Arvutame koondtunnid
-    sum_tootunnid = res_df['Töötunde'].sum()
-    sum_ohtu = res_df['Õhtu h'].sum()
-    sum_oo = res_df['Öö h'].sum()
-    sum_paus = res_df['Paus >12h'].sum()
-    sum_split = res_df['Spliti kestus'].sum()
-
     # Kvalifikatsioonitasu
     baas_kval = KVALIFIKATSIOONID[kval]
     kval_summa = min(baas_kval, (baas_kval / norm_paevad) * toopaevad_count) if norm_paevad > 0 else 0
 
-    # Teeme kaks tulpa: üks tundidele, teine rahale
+    # Teeme kaks tulpa
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown("### 🕒 Tundide kokkuvõte")
         tundide_tabel = pd.DataFrame({
-            "Kirjeldus": ["Töötunnid kokku", "Õhtutunnid (18-22)", "Öötunnid (22-06)", "Pausid (>12h osa)", "Split-tuuride kogukestus"],
-            "Hulk (h)": [sum_tootunnid, sum_ohtu, sum_oo, sum_paus, sum_split]
+            "Kirjeldus": ["Töötunnid kokku", "Õhtutunnid (18-22)", "Öötunnid (22-06)", "Split-tuuride kogukestus"],
+            "Hulk (h)": [
+                res_df['Töötunde'].sum(),
+                res_df['Õhtu h'].sum(),
+                res_df['Öö h'].sum(),
+                res_df['Spliti kestus'].sum()
+            ]
         })
-        st.table(tundide_tabel)
+        st.table(tundide_tabel.round(2)) # .round(2) võtab need pikad komakohad ära
 
     with col2:
         st.markdown("### 💰 Rahaline kokkuvõte")
@@ -250,27 +250,14 @@ if tulemused:
             ],
             "Summa (€)": [
                 res_df['Põhitasu (€)'].sum(),
-                (res_df['Õhtu h'].sum() * TUNNIHIND * OHTULISA_PROTSENT) + (res_df['Öö h'].sum() * TUNNIHIND * OOLISA_PROTSENT),
-                res_df['Split (20%)'].sum() if 'Split (20%)' in res_df else sum_split * TUNNIHIND * KAHEPOOLNE_LISA, # Arvutus kui veergu pole
-                res_df['Õpilane'].sum() if 'Õpilane' in res_df else 0,
+                res_df['Õhtu/Öö lisa (€)'].sum(),
+                res_df['Split lisa (€)'].sum(),
+                res_df['Õpilase lisa (€)'].sum(),
                 kval_summa
             ]
         })
-        # Parandame rahalise tabeli kuvamist kui mõni veerg oli listis teistmoodi
-        # Kasutame koondsummasid otse tulemuste listist turvalisuse mõttes:
-        rah_summ["Summa (€)"] = [
-            res_df['Põhitasu (€)'].sum(),
-            res_df['Õhtu/Öö'].sum() if 'Õhtu/Öö' in res_df else (sum_ohtu * TUNNIHIND * OHTULISA_PROTSENT + sum_oo * TUNNIHIND * OOLISA_PROTSENT),
-            res_df['Split (20%)'].sum() if 'Split (20%)' in res_df else 0,
-            res_df['Õpilane'].sum() if 'Õpilane' in res_df else 0,
-            kval_summa
-        ]
         
-        rah_summ['Summa (€)'] = rah_summ['Summa (€)'].round(2)
-        st.table(rah_summ)
+        st.table(rah_summ.round(2))
         
         kogusumma = round(rah_summ['Summa (€)'].sum(), 2)
         st.success(f"**HINNANGULINE KOGUSUMMA (BRUTO): {kogusumma} €**")
-    
-else:
-    st.info("Palun täida töögraafik (vali tuurid), et näha tulemusi.")
