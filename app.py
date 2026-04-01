@@ -46,7 +46,7 @@ def arvuta_ajad(algus_str, lopp_str):
     except:
         return 0.0, 0.0, 0.0
 
-@st.cache_data(ttl=600) # Uuendab andmeid iga 10 minuti tagant
+@st.cache_data(ttl=600)
 def lae_andmebaas():
     try:
         df = pd.read_csv(SHEET_URL)
@@ -80,7 +80,6 @@ korr_min = st.sidebar.number_input("Minutid (+/-)", value=0, step=1)
 _, viimane_paev = calendar.monthrange(valitud_aasta, valitud_kuu)
 kuupaevad = [date(valitud_aasta, valitud_kuu, d) for d in range(1, viimane_paev + 1)]
 
-# Tuuride valik (Otsib DB-st kõik unikaalsed tuurid, lisab erikoodid)
 if not db.empty and 'TUUR' in db.columns:
     tuuride_valik = [""] + sorted(db['TUUR'].dropna().astype(str).unique().tolist()) + ["P", "TÕ", "KO", "KV"]
 else:
@@ -92,7 +91,8 @@ if 'df_input' not in st.session_state or st.button("Uuenda kalendrit uue kuu jao
     st.session_state.df_input = pd.DataFrame({
         "Kuupäev": kuupaevad,
         "Tuur": [""] * len(kuupaevad),
-        "Õpilane (Õ)": [False] * len(kuupaevad)
+        "Õpilane (Õ)": [False] * len(kuupaevad),
+        "Riigipüha": [False] * len(kuupaevad) # Uus veerg pühade jaoks
     })
 
 muudetud_df = st.data_editor(
@@ -100,7 +100,8 @@ muudetud_df = st.data_editor(
     column_config={
         "Kuupäev": st.column_config.DateColumn(disabled=True, format="DD.MM.YYYY"),
         "Tuur": st.column_config.SelectboxColumn("Vali Tuur", options=tuuride_valik, width="medium"),
-        "Õpilane (Õ)": st.column_config.CheckboxColumn("Õpilane")
+        "Õpilane (Õ)": st.column_config.CheckboxColumn("Õpilane"),
+        "Riigipüha": st.column_config.CheckboxColumn("Riigipüha (2x baas)")
     },
     hide_index=True,
     use_container_width=True
@@ -116,65 +117,79 @@ for _, row in muudetud_df.iterrows():
     kp = row["Kuupäev"]
     kood = str(row["Tuur"]).strip().upper()
     is_student = row["Õpilane (Õ)"]
+    is_holiday = row["Riigipüha"]
     
     if not kood or kood == "": 
         continue
     
-    t, ohtu, oo, paus, split_tasu, opilane_tasu = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    t_span, ohtu_h, oo_h, t_work, paus_h = 0.0, 0.0, 0.0, 0.0, 0.0
+    p_tasu_rida, o_tasu_rida, split_tasu, opilane_tasu = 0.0, 0.0, 0.0, 0.0
     leitud = False
-    on_kahepoolne = "/" in kood  # Loogika: kahepoolne on see, millel on "/1" või "/2"
+    on_kahepoolne = "/" in kood  
     
     # Erikoodid
     if kood == "P":
         normist_maha += 8
         leitud = True
     elif kood in ["TÕ", "KO", "KV"]:
-        t = {"TÕ": 2.0, "KO": 8.0, "KV": 4.0}[kood]
+        t_work = {"TÕ": 2.0, "KO": 8.0, "KV": 4.0}[kood]
         toopaevad_count += 1
         leitud = True
+        if kp == korr_kp: t_work += (korr_min / 60.0)
+        aktiivne_too = t_work
+        baas_kordaja = 2.0 if is_holiday else 1.0
+        p_tasu_rida = aktiivne_too * TUNNIHIND * baas_kordaja
+        
     else:
-        # Otsime tuuri DB-st (eeldab veergusid TUUR, ALGUS, LOPP)
+        # Otsime tuuri DB-st
         if not db.empty:
             otsing = db[db['TUUR'].astype(str).str.upper() == kood]
             if not otsing.empty:
                 rida = otsing.iloc[0]
                 leitud = True
                 toopaevad_count += 1
-                t_raw, o_h, oo_h = arvuta_ajad(rida['ALGUS'], rida['LOPP'])
                 
-                # 12h piirangu loogika (tasustatud paus 60%)
-                if t_raw > 12:
-                    paus = t_raw - 12
-                    suhe = 12 / t_raw
-                    ohtu, oo, t = o_h * suhe, oo_h * suhe, 12.0
+                # t_span on KOGU aeg algusest lõpuni (sh paus kahe osa vahel)
+                t_span, ohtu_h, oo_h = arvuta_ajad(rida['ALGUS'], rida['LOPP'])
+                
+                # KRIITILINE: Reaalsed töötunnid (vaja õpilase ja põhitasu jaoks)
+                # Eeldab, et DB-s on veerg "TÖÖTUNNID". Kui ei ole, kasutab span'i.
+                if 'TÖÖTUNNID' in db.columns:
+                    t_work = float(rida['TÖÖTUNNID'])
                 else:
-                    ohtu, oo, t = o_h, oo_h, t_raw
+                    t_work = t_span
+
+                # Manuaalne korrektsioon töötundidele
+                if kp == korr_kp:
+                    t_work += (korr_min / 60.0)
                 
-                # Rahalised väärtused põhitasu osas
-                pohitasu_baas = (t * TUNNIHIND) + (paus * TUNNIHIND * PAUSI_TASU_PROTSENT)
+                # 12h piirangu loogika (Rakendub AINULT töötundidele)
+                aktiivne_too = min(t_work, 12.0)
+                paus_h = max(0.0, t_work - 12.0)
                 
-                # Kahepoolse tuuri lisa (20%) - ainult kui koodis on "/"
+                # Riigipüha loogika (Kordaja 2.0 ainult 12.42 baasile)
+                baas_kordaja = 2.0 if is_holiday else 1.0
+                
+                # PÕHITASU + >12h PAUSITASU
+                p_tasu_rida = (aktiivne_too * TUNNIHIND * baas_kordaja) + (paus_h * TUNNIHIND * PAUSI_TASU_PROTSENT)
+                
+                # LISAD (Arvutatakse alati tavalise TUNNIHIND (12.42) baasil)
+                o_tasu_rida = (ohtu_h * TUNNIHIND * OHTULISA_PROTSENT) + (oo_h * TUNNIHIND * OOLISA_PROTSENT)
+                
+                # KAHEPOOLNE LISATASU (20% kehtib kogu SPAN'ile alates 1. osa algusest kuni 2. osa lõpuni)
                 if on_kahepoolne:
-                    split_tasu = pohitasu_baas * KAHEPOOLNE_LISA
+                    split_tasu = t_span * TUNNIHIND * KAHEPOOLNE_LISA
                 
-                # Õpilase tasu tervele tuurile
+                # ÕPILASE TASU (Rakendub ainult reaalsetele TÖÖTUNDIDELE, mitte vahepausile)
                 if is_student:
-                    opilane_tasu = (t + paus) * OPILASE_TASU_TUNNIS
+                    opilane_tasu = t_work * OPILASE_TASU_TUNNIS
 
-    # Manuaalne minutite lisamine vastavale kuupäevale
-    if kp == korr_kp and leitud:
-        t += (korr_min / 60.0)
-
-    # Kui rida on kehtiv, salvestame tulemuse
     if leitud:
-        p_tasu_rida = (t * TUNNIHIND) + (paus * TUNNIHIND * PAUSI_TASU_PROTSENT)
-        o_tasu_rida = (ohtu * TUNNIHIND * OHTULISA_PROTSENT) + (oo * TUNNIHIND * OOLISA_PROTSENT)
-        kokku_tunnid += (t + paus)
-        
+        kokku_tunnid += t_work
         tulemused.append({
             "Kuupäev": kp.strftime("%d.%m"),
             "Tuur": kood,
-            "Tunde": round(t + paus, 2),
+            "Tunde": round(t_work, 2),
             "Põhitasu+Paus": round(p_tasu_rida, 2),
             "Õhtu/Öö": round(o_tasu_rida, 2),
             "Split (20%)": round(split_tasu, 2),
@@ -190,19 +205,16 @@ if tulemused:
     res_df = pd.DataFrame(tulemused)
     st.dataframe(res_df, hide_index=True, use_container_width=True)
     
-    # Kvalifikatsioonitasu arvutus
+    # Kvalifikatsioonitasu arvutus (arvestab haiguspäevadega automaatselt läbi töötatud päevade)
     baas_kval = KVALIFIKATSIOONID[kval]
     kval_summa = min(baas_kval, (baas_kval / norm_paevad) * toopaevad_count) if norm_paevad > 0 else 0
 
-    # Koondtabeli kuvamine
     st.subheader("💰 Koondkokkuvõte")
-    
-    # Töötundide info kohe tabeli kohal
     st.info(f"**Töötunnid kokku:** {round(kokku_tunnid, 2)} h")
     
     df_summ = pd.DataFrame({
         "Tasuliik": [
-            "1. Põhitasu (sh >12h pausid)", 
+            "1. Põhitasu (sh >12h pausid ja pühad)", 
             "2. Õhtu- ja öölisad", 
             "3. Kahepoolne tuur (Split 20%)", 
             "4. Õpilase juhendamine", 
