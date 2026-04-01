@@ -152,10 +152,15 @@ for _, row in muudetud_df.iterrows():
                 # t_span on KOGU aeg algusest lõpuni (sh paus kahe osa vahel)
                 t_span, ohtu_h, oo_h = arvuta_ajad(rida['ALGUS'], rida['LOPP'])
                 
-                # KRIITILINE: Reaalsed töötunnid (vaja õpilase ja põhitasu jaoks)
-                # Eeldab, et DB-s on veerg "TÖÖTUNNID". Kui ei ole, kasutab span'i.
-                if 'TÖÖTUNNID' in db.columns:
-                    t_work = float(rida['TÖÖTUNNID'])
+               # KRIITILINE: Reaalsed töötunnid (vaja õpilase ja põhitasu jaoks)
+                if 'TÖÖTUNNID' in db.columns and pd.notna(rida['TÖÖTUNNID']) and str(rida['TÖÖTUNNID']).strip() != "":
+                    try:
+                        # Puhastame teksti: asendame komad punktidega ja eemaldame tühikud
+                        puhas_vaartus = str(rida['TÖÖTUNNID']).strip().replace(',', '.')
+                        t_work = float(puhas_vaartus)
+                    except ValueError:
+                        # Kui lahtris on mingi tekst, mida ei saa numbriks teha, kasutame kogu aega
+                        t_work = t_span
                 else:
                     t_work = t_span
 
