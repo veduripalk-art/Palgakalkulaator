@@ -189,17 +189,21 @@ for _, row in muudetud_df.iterrows():
                 if is_student:
                     opilane_tasu = t_work * OPILASE_TASU_TUNNIS
 
+    # ... (eelnev kood kuni "if leitud:" osani loopi sees) ...
+
     if leitud:
         kokku_tunnid += t_work
         tulemused.append({
             "Kuupäev": kp.strftime("%d.%m"),
             "Tuur": kood,
-            "Tunde": round(t_work, 2),
-            "Põhitasu+Paus": round(p_tasu_rida, 2),
-            "Õhtu/Öö": round(o_tasu_rida, 2),
-            "Split (20%)": round(split_tasu, 2),
-            "Õpilane": round(opilane_tasu, 2),
-            "Päev Kokku": round(p_tasu_rida + o_tasu_rida + split_tasu + opilane_tasu, 2)
+            "Töötunde": round(t_work, 2),
+            "Õhtu h": round(ohtu_h, 2),
+            "Öö h": round(oo_h, 2),
+            "Paus >12h": round(paus_h, 2),
+            "Spliti kestus": round(t_span if on_kahepoolne else 0, 2),
+            "Põhitasu (€)": round(p_tasu_rida, 2),
+            "Lisad (€)": round(o_tasu_rida + split_tasu + opilane_tasu, 2),
+            "Päev Kokku (€)": round(p_tasu_rida + o_tasu_rida + split_tasu + opilane_tasu, 2)
         })
 
 # 4. KOKKUVÕTE
@@ -208,37 +212,65 @@ st.subheader("📊 Arvutuskäik ja tulemused")
 
 if tulemused:
     res_df = pd.DataFrame(tulemused)
+    
+    # Kuvame põhitabeli
     st.dataframe(res_df, hide_index=True, use_container_width=True)
     
-    # Kvalifikatsioonitasu arvutus (arvestab haiguspäevadega automaatselt läbi töötatud päevade)
+    # Arvutame koondtunnid
+    sum_tootunnid = res_df['Töötunde'].sum()
+    sum_ohtu = res_df['Õhtu h'].sum()
+    sum_oo = res_df['Öö h'].sum()
+    sum_paus = res_df['Paus >12h'].sum()
+    sum_split = res_df['Spliti kestus'].sum()
+
+    # Kvalifikatsioonitasu
     baas_kval = KVALIFIKATSIOONID[kval]
     kval_summa = min(baas_kval, (baas_kval / norm_paevad) * toopaevad_count) if norm_paevad > 0 else 0
 
-    st.subheader("💰 Koondkokkuvõte")
-    st.info(f"**Töötunnid kokku:** {round(kokku_tunnid, 2)} h")
-    
-    df_summ = pd.DataFrame({
-        "Tasuliik": [
-            "1. Põhitasu (sh >12h pausid ja pühad)", 
-            "2. Õhtu- ja öölisad", 
-            "3. Kahepoolne tuur (Split 20%)", 
-            "4. Õpilase juhendamine", 
-            "5. Kvalifikatsioonitasu"
-        ],
-        "Summa (€)": [
-            res_df['Põhitasu+Paus'].sum(),
-            res_df['Õhtu/Öö'].sum(),
-            res_df['Split (20%)'].sum(),
-            res_df['Õpilane'].sum(),
+    # Teeme kaks tulpa: üks tundidele, teine rahale
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### 🕒 Tundide kokkuvõte")
+        tundide_tabel = pd.DataFrame({
+            "Kirjeldus": ["Töötunnid kokku", "Õhtutunnid (18-22)", "Öötunnid (22-06)", "Pausid (>12h osa)", "Split-tuuride kogukestus"],
+            "Hulk (h)": [sum_tootunnid, sum_ohtu, sum_oo, sum_paus, sum_split]
+        })
+        st.table(tundide_tabel)
+
+    with col2:
+        st.markdown("### 💰 Rahaline kokkuvõte")
+        rah_summ = pd.DataFrame({
+            "Tasuliik": [
+                "Põhitasu (sh pühad ja pausid)", 
+                "Õhtu- ja öölisad", 
+                "Split-lisa (20% span)", 
+                "Õpilase juhendamine", 
+                "Kvalifikatsioonitasu"
+            ],
+            "Summa (€)": [
+                res_df['Põhitasu (€)'].sum(),
+                (res_df['Õhtu h'].sum() * TUNNIHIND * OHTULISA_PROTSENT) + (res_df['Öö h'].sum() * TUNNIHIND * OOLISA_PROTSENT),
+                res_df['Split (20%)'].sum() if 'Split (20%)' in res_df else sum_split * TUNNIHIND * KAHEPOOLNE_LISA, # Arvutus kui veergu pole
+                res_df['Õpilane'].sum() if 'Õpilane' in res_df else 0,
+                kval_summa
+            ]
+        })
+        # Parandame rahalise tabeli kuvamist kui mõni veerg oli listis teistmoodi
+        # Kasutame koondsummasid otse tulemuste listist turvalisuse mõttes:
+        rah_summ["Summa (€)"] = [
+            res_df['Põhitasu (€)'].sum(),
+            res_df['Õhtu/Öö'].sum() if 'Õhtu/Öö' in res_df else (sum_ohtu * TUNNIHIND * OHTULISA_PROTSENT + sum_oo * TUNNIHIND * OOLISA_PROTSENT),
+            res_df['Split (20%)'].sum() if 'Split (20%)' in res_df else 0,
+            res_df['Õpilane'].sum() if 'Õpilane' in res_df else 0,
             kval_summa
         ]
-    })
-    
-    df_summ['Summa (€)'] = df_summ['Summa (€)'].round(2)
-    st.table(df_summ)
-    
-    kogusumma = round(df_summ['Summa (€)'].sum(), 2)
-    st.success(f"**HINNANGULINE KOGUSUMMA (BRUTO): {kogusumma} €**")
+        
+        rah_summ['Summa (€)'] = rah_summ['Summa (€)'].round(2)
+        st.table(rah_summ)
+        
+        kogusumma = round(rah_summ['Summa (€)'].sum(), 2)
+        st.success(f"**HINNANGULINE KOGUSUMMA (BRUTO): {kogusumma} €**")
     
 else:
     st.info("Palun täida töögraafik (vali tuurid), et näha tulemusi.")
