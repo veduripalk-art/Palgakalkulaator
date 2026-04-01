@@ -214,29 +214,43 @@ st.subheader("📊 Arvutuskäik ja tulemused")
 
 if tulemused:
     res_df = pd.DataFrame(tulemused)
-    
-    # Kuvame põhitasu tabeli (võid siit veergusid vähemaks võtta, kui liiga lai)
     st.dataframe(res_df, hide_index=True, use_container_width=True)
     
-    # Kvalifikatsioonitasu
+    # --- KVALIFIKATSIOONITASU PARANDATUD ARVUTUS ---
     baas_kval = KVALIFIKATSIOONID[kval]
-    kval_summa = min(baas_kval, (baas_kval / norm_paevad) * toopaevad_count) if norm_paevad > 0 else 0
+    
+    # Arvutame päeva hinna vastavalt kuu normile
+    # Kui norm on 21 ja baas 165, siis üks päev väärt 7.85€
+    if norm_paevad > 0:
+        paeva_tasu = baas_kval / norm_paevad
+        # Arvutatud summa vastavalt tehtud tööpäevadele
+        arvutatud_kval = paeva_tasu * toopaevad_count
+        # Piirame summa: see ei tohi ületada baasi
+        loplik_kval_tasu = min(baas_kval, arvutatud_kval)
+    else:
+        loplik_kval_tasu = 0
 
     # Teeme kaks tulpa
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown("### 🕒 Tundide kokkuvõte")
+        # Kuvame ka tööpäevade arvu, et saaksid kontrollida
         tundide_tabel = pd.DataFrame({
-            "Kirjeldus": ["Töötunnid kokku", "Õhtutunnid (18-22)", "Öötunnid (22-06)", "Split-tuuride kogukestus"],
-            "Hulk (h)": [
-                res_df['Töötunde'].sum(),
-                res_df['Õhtu h'].sum(),
-                res_df['Öö h'].sum(),
-                res_df['Spliti kestus'].sum()
+            "Kirjeldus": [
+                "Töötunnid kokku", 
+                "Õhtutunnid (18-22)", 
+                "Öötunnid (22-06)", 
+                "Tööpäevi kval. jaoks" # See näitab, mitu päeva arvesse läks
+            ],
+            "Hulk": [
+                round(res_df['Töötunde'].sum(), 2),
+                round(res_df['Õhtu h'].sum(), 2),
+                round(res_df['Öö h'].sum(), 2),
+                toopaevad_count
             ]
         })
-        st.table(tundide_tabel.round(2)) # .round(2) võtab need pikad komakohad ära
+        st.table(tundide_tabel)
 
     with col2:
         st.markdown("### 💰 Rahaline kokkuvõte")
@@ -253,7 +267,7 @@ if tulemused:
                 res_df['Õhtu/Öö lisa (€)'].sum(),
                 res_df['Split lisa (€)'].sum(),
                 res_df['Õpilase lisa (€)'].sum(),
-                kval_summa
+                loplik_kval_tasu # Siin on nüüd parandatud ja piiratud summa
             ]
         })
         
